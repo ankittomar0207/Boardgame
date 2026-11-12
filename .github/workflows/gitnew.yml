@@ -28,12 +28,10 @@ jobs:
 
     - name: Install Trivy
       run: |
-        sudo apt-get update
-        sudo apt-get install -y wget gnupg lsb-release
-        wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
-        echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
-        sudo apt-get update
-        sudo apt-get install -y trivy=0.74.0
+        wget -q https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz
+        tar -xzf trivy_0.74.0_Linux-64bit.tar.gz trivy
+        sudo mv trivy /usr/local/bin/trivy
+        rm trivy_0.74.0_Linux-64bit.tar.gz
         trivy --version
     
     - name: Trivy FS Scan
