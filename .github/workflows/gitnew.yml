@@ -3,23 +3,42 @@ name: CICD Pipeline
 on:
   push:
     branches: [ "main" ]
-  workflow_dispatch: #
+  workflow_dispatch:
+    inputs:
+      deploy_only:
+        description: "Skip build; deploy existing Docker Hub image only"
+        type: boolean
+        default: false
+      image_tag:
+        description: "Docker Hub tag to deploy when deploy_only is ticked"
+        type: string
+        default: "latest"
+
+env:
+  IMAGE: ankittomar0207/boardgame     # Docker Hub repo (username/repo)
+  SERVICE: boardgame-test             # Cloud Run service name (created if missing)
+  REGION: asia-south1                 # Cloud Run region
+  PORT: "8080"                        # port your app listens on
 
 jobs:
   build:
-
+    if: ${{ !inputs.deploy_only }}    # skipped when deploy_only is ticked
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
 
     steps:
-    - uses: actions/checkout@v3
-    - name: Set up JDK 17 new 
-      uses: actions/setup-java@v3
+    - uses: actions/checkout@v4
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
         cache: maven
+
     - name: Build with Maven
-      run: mvn package --file pom.xml
+      run: mvn -B -ntp package --file pom.xml
 
     - uses: actions/upload-artifact@v4
       with:
@@ -33,31 +52,35 @@ jobs:
         sudo mv trivy /usr/local/bin/trivy
         rm trivy_0.74.0_Linux-64bit.tar.gz
         trivy --version
-    
+
+    - name: Get date for Trivy cache key
+      id: date
+      run: echo "date=$(date +%F)" >> "$GITHUB_OUTPUT"
+
+    - name: Cache Trivy DB
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/trivy
+        key: trivy-db-${{ steps.date.outputs.date }}
+        restore-keys: trivy-db-
+
     - name: Trivy FS Scan
       run: |
-        trivy fs --format table -o trivy-fs-report.html .
-        
+        trivy fs --skip-version-check --format table -o trivy-fs-report.txt .
+
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Cache Trivy DB
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/trivy
-        key: trivy-db-${{ github.run_id }}
-        restore-keys: trivy-db-
-
     - name: Build Docker Image
       run: |
-        docker build -t ankittomar0207/boardgame:latest .
+        docker build -t $IMAGE:latest -t $IMAGE:${{ github.sha }} .
 
     - name: Trivy Image Scan
       run: |
-        trivy image --format table -o trivy-image-report.html ankittomar0207/boardgame:latest
+        trivy image --skip-version-check --format table -o trivy-image-report.txt $IMAGE:latest
 
     - name: Login to Docker Hub
       uses: docker/login-action@v4
@@ -67,6 +90,36 @@ jobs:
 
     - name: Push Docker Image
       run: |
-          docker push ankittomar0207/boardgame:latest
-          
-    
+        docker push $IMAGE:latest
+        docker push $IMAGE:${{ github.sha }}
+
+  deploy-cloud-run:
+    needs: build
+    # run after a successful build, or when build was skipped (deploy_only)
+    if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write                 # required for Workload Identity Federation
+
+    steps:
+    - name: Authenticate to GCP (keyless, WIF)
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+        service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
+
+    - name: Set up gcloud
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Deploy to Cloud Run
+      uses: google-github-actions/deploy-cloudrun@v2
+      with:
+        service: ${{ env.SERVICE }}
+        region: ${{ env.REGION }}
+        # deploy_only -> typed tag; normal run -> the SHA tag just built and pushed
+        image: docker.io/${{ env.IMAGE }}:${{ inputs.deploy_only && inputs.image_tag || github.sha }}
+        flags: --allow-unauthenticated --port=${{ env.PORT }}
+
+    - name: Show service URL
+      run: gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)'
