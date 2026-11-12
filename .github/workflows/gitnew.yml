@@ -25,12 +25,23 @@ jobs:
       with:
         name: Boardgame
         path: target/*.jar
-        
+
+    - name: Install Trivy
+      run: |
+        if ! command -v trivy >/dev/null 2>&1; then
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+        fi
+        trivy --version
+
     - name: Trivy FS Scan
       run: |
         trivy fs --format table -o trivy-fs-report.html .
-
-    
+        
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
 
@@ -53,6 +64,6 @@ jobs:
 
     - name: Push Docker Image
       run: |
-          docker push adijaiswal/boardgame:latest
+          docker push ankittomar0207/boardgame:latest
           
     
